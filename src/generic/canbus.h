@@ -27,4 +27,11 @@ void canbus_set_filter(uint32_t id);
 void canbus_notify_tx(void);
 void canbus_process_data(struct canbus_msg *msg);
 
+#define CAN_STATE_ERROR_ACTIVE 0
+#define CAN_STATE_ERROR_WARNING 1
+#define CAN_STATE_ERROR_PASSIVE 2
+#define CAN_STATE_BUS_OFF 3
+
+void canbus_notify_state(unsigned state);
+
 #endif // canbus.h

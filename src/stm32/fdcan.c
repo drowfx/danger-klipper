@@ -220,6 +220,19 @@ CAN_IRQHandler(void)
         SOC_CAN->IR = FDCAN_IE_TC;
         canbus_notify_tx();
     }
+    if (ir & (FDCAN_IR_BO | FDCAN_IR_EW | FDCAN_IR_EP)) {
+        // bus state changed
+        const uint32_t psr = SOC_CAN->PSR;
+        unsigned state = CAN_STATE_ERROR_ACTIVE;
+        if (psr & FDCAN_PSR_BO) {
+            state = CAN_STATE_BUS_OFF;
+        } else if (psr & FDCAN_PSR_EP) {
+            state = CAN_STATE_ERROR_PASSIVE;
+        } else if (psr & FDCAN_PSR_EW) {
+            state = CAN_STATE_ERROR_WARNING;
+        }
+        canbus_notify_state(state);
+    }
 }
 
 static inline const uint32_t
@@ -320,6 +333,6 @@ can_init(void)
     /*##-3- Configure Interrupts #################################*/
     armcm_enable_irq(CAN_IRQHandler, CAN_IT0_IRQn, 1);
     SOC_CAN->ILE = FDCAN_ILE_EINT0;
-    SOC_CAN->IE = FDCAN_IE_RF0NE | FDCAN_IE_TC;
+    SOC_CAN->IE = FDCAN_IE_RF0NE | FDCAN_IE_TC | FDCAN_IE_BOE | FDCAN_IE_EPE | FDCAN_IE_EWE;
 }
 DECL_INIT(can_init);

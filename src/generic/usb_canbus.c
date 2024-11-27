@@ -100,6 +100,23 @@ struct gs_host_frame {
  * Message sending
  ****************************************************************/
 
+#define USB_CAN_STATE_CHANGED 0x80000000
+
+// from linux uapi/linux/can/error.h, the gs_usb protocol just sends these over
+// USB
+#define CAN_ERR_CRTL         0x00000004U /* controller problems / data[1]    */
+#define CAN_ERR_BUSOFF       0x00000040U       /* bus off */
+
+#define CAN_ERR_CRTL_RX_OVERFLOW 0x01 /* RX buffer overflow */
+#define CAN_ERR_CRTL_TX_OVERFLOW 0x02 /* TX buffer overflow */
+#define CAN_ERR_CRTL_RX_WARNING  0x04 /* reached warning level for RX errors */
+#define CAN_ERR_CRTL_TX_WARNING  0x08 /* reached warning level for TX errors */
+#define CAN_ERR_CRTL_RX_PASSIVE  0x10 /* reached error passive status RX */
+#define CAN_ERR_CRTL_TX_PASSIVE  0x20 /* reached error passive status TX */
+				      /* (at least one error counter exceeds */
+				      /* the protocol-defined level of 127)  */
+#define CAN_ERR_CRTL_ACTIVE      0x40 /* recovered to error active state */
+
 // Global storage
 static struct usbcan_data {
     struct task_wake wake;
@@ -116,6 +133,7 @@ static struct usbcan_data {
     // Data from physical canbus interface
     uint32_t canhw_pull_pos, canhw_push_pos;
     struct canbus_msg canhw_queue[32];
+    unsigned state;
 } UsbCan;
 
 enum {
@@ -129,6 +147,12 @@ DECL_CONSTANT("CANBUS_BRIDGE", 1);
 void
 canbus_notify_tx(void)
 {
+    sched_wake_task(&UsbCan.wake);
+}
+
+void canbus_notify_state(unsigned state)
+{
+    UsbCan.state = state | USB_CAN_STATE_CHANGED;
     sched_wake_task(&UsbCan.wake);
 }
 
@@ -222,6 +246,32 @@ usbcan_task(void)
     uint32_t pullp = pull_pos % ARRAY_SIZE(UsbCan.host_frames);
     struct gs_host_frame *gs = &UsbCan.host_frames[pullp];
     for (;;) {
+        // TODO: interrupt safety?
+        const unsigned state = UsbCan.state;
+        UsbCan.state &= ~USB_CAN_STATE_CHANGED;
+        if (state & USB_CAN_STATE_CHANGED) {
+            struct gs_host_frame gs = {};
+            gs.echo_id = 0xffffffff;
+            switch(state) {
+            case CAN_STATE_BUS_OFF:
+                gs.can_id = CAN_ERR_BUSOFF;
+                break;
+            case CAN_STATE_ERROR_PASSIVE:
+                gs.can_id = CAN_ERR_CRTL;
+                gs.data[1] = CAN_ERR_CRTL_TX_PASSIVE;
+                break;
+            case CAN_STATE_ERROR_WARNING:
+                gs.can_id = CAN_ERR_CRTL;
+                gs.data[1] = CAN_ERR_CRTL_TX_WARNING;
+                break;
+            case CAN_STATE_ERROR_ACTIVE:
+                gs.can_id = CAN_ERR_CRTL;
+                gs.data[1] = CAN_ERR_CRTL_ACTIVE;
+                break;
+            }
+            usb_send_bulk_in(&gs, sizeof(gs)); 
+        }
+        
         // See if previous host frame needs to be transmitted
         uint_fast8_t host_status = UsbCan.host_status;
         if (host_status & (HS_TX_HW | HS_TX_LOCAL)) {
